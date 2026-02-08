@@ -8,7 +8,6 @@
         body { font-family: 'Segoe UI', sans-serif; height: 100vh; margin: 0; background: #000; color: #ccc; display: flex; }
         #sidebar { width: 300px; background: #161b22; border-right: 1px solid #333; display: flex; flex-direction: column; }
         #main { flex: 1; display: flex; flex-direction: column; position: relative; }
-        
         .stock-item { padding: 12px; border-bottom: 1px solid #333; cursor: pointer; display: flex; justify-content: space-between; }
         .stock-item:hover { background: #222; }
         .up { color: #4caf50; } .down { color: #f23645; }
@@ -22,16 +21,16 @@
         button { padding: 8px 20px; border: none; font-weight: bold; cursor: pointer; }
         .buy { background: #238636; color: white; } .sell { background: #da3633; color: white; }
         
-        #overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; z-index: 99; flex-direction: column; }
+        #overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.95); display: flex; justify-content: center; align-items: center; z-index: 99; flex-direction: column; }
         .hidden { display: none !important; }
-        h1 { color: white; }
+        h1 { color: white; font-size: 32px; }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <h1 id="status-text">Connecting...</h1>
-    <p>Waiting for Organizer to Start</p>
+    <h1 id="status-text">WAITING FOR ORGANIZER...</h1>
+    <p style="color:#888;">Do not refresh the page.</p>
 </div>
 
 <div id="sidebar">
@@ -62,8 +61,8 @@
             <option value="stop_loss_sell">Stop Loss (Sell)</option>
             <option value="stop_loss_buy">Stop Loss (Buy)</option>
         </select>
-        <input type="number" id="qty" placeholder="Qty" value="50" style="width:60px;">
-        <input type="number" id="trig" placeholder="Trigger Price" style="display:none; width:80px;">
+        <input type="number" id="qty" placeholder="Qty" value="50" style="width:80px;">
+        <input type="number" id="trig" placeholder="Trigger Price" style="display:none; width:100px;">
         
         <button class="buy" onclick="trade('buy')">BUY</button>
         <button class="sell" onclick="trade('sell')">SELL</button>
@@ -76,9 +75,9 @@
     const params = new URLSearchParams(window.location.search);
     let username = params.get('username') || "Guest";
     let currentSym = "";
-    let candleData = {}; // { RELIANCE: [{time, open...}, ...], ... }
+    let candleData = {}; 
     
-    // --- CHARTS ---
+    // CHARTS
     const chart = LightweightCharts.createChart(document.getElementById('price-chart'), {
         layout: { background: { type: 'solid', color: '#0d1117' }, textColor: '#ccc' },
         grid: { vertLines: { color: '#222' }, horzLines: { color: '#222' } },
@@ -92,24 +91,33 @@
         timeScale: { visible: false }
     });
     const rsiSeries = rsiChart.addLineSeries({ color: '#2962ff', lineWidth: 1 });
-    const rsiBase = rsiChart.addLineSeries({ color: 'white', lineWidth: 1, lineStyle: 2 }); // 70/30 lines logic can be added
+    // Add reference lines for 70/30
+    const top = rsiChart.addLineSeries({ color: '#555', lineWidth: 1, lineStyle: 2 });
+    top.setData([{ time: 0, value: 70 }, { time: 9999999999, value: 70 }]);
+    const bot = rsiChart.addLineSeries({ color: '#555', lineWidth: 1, lineStyle: 2 });
+    bot.setData([{ time: 0, value: 30 }, { time: 9999999999, value: 30 }]);
 
-    // --- LOGIC ---
+    // SOCKET LOGIC
     socket.emit('join_game', {username: username});
 
     socket.on('game_status', (d) => {
+        console.log("STATUS UPDATE:", d.status);
         document.getElementById('day').innerText = d.day;
         let ov = document.getElementById('overlay');
         let txt = document.getElementById('status-text');
         
-        if(d.status === 'lobby') { ov.classList.remove('hidden'); txt.innerText = "LOBBY - WAITING"; }
-        else if(d.status === 'active') { ov.classList.add('hidden'); }
-        else if(d.status === 'paused') { ov.classList.remove('hidden'); txt.innerText = "GAME PAUSED"; }
-        else if(d.status === 'ended') { ov.classList.remove('hidden'); txt.innerText = "GAME OVER"; }
-    });
-    
-    socket.on('game_over', (d) => {
-        document.getElementById('status-text').innerHTML = `WINNER: ${d.winner}<br>Returns: ₹${d.return}`;
+        if(d.status === 'lobby') {
+            ov.classList.remove('hidden');
+            txt.innerText = "LOBBY - WAITING FOR START";
+        } else if(d.status === 'active') {
+            ov.classList.add('hidden'); // This hides the overlay
+        } else if(d.status === 'paused') {
+            ov.classList.remove('hidden');
+            txt.innerText = "GAME PAUSED";
+        } else if(d.status === 'ended') {
+            ov.classList.remove('hidden');
+            txt.innerText = "GAME OVER";
+        }
     });
 
     socket.on('init_data', (d) => {
@@ -132,14 +140,15 @@
                 el.innerText = prices[s].toFixed(2);
                 el.className = prices[s] >= old ? "up" : "down";
             }
-            // Update Live Candle on Chart
-            if(s === currentSym && candleData[s].length > 0) {
-                let last = {...candleData[s][candleData[s].length-1]};
-                // Fake the update for smooth visual
-                last.close = prices[s];
-                last.high = Math.max(last.high, prices[s]);
-                last.low = Math.min(last.low, prices[s]);
-                candleSeries.update(last);
+            if(s === currentSym) {
+                let hist = candleData[s];
+                if(hist.length > 0) {
+                    let last = {...hist[hist.length-1]};
+                    last.close = prices[s];
+                    last.high = Math.max(last.high, prices[s]);
+                    last.low = Math.min(last.low, prices[s]);
+                    candleSeries.update(last);
+                }
             }
         }
     });
@@ -147,7 +156,6 @@
     socket.on('candle_close', (d) => {
         if(!candleData[d.symbol]) candleData[d.symbol] = [];
         candleData[d.symbol].push(d.candle);
-        
         if(d.symbol === currentSym) {
             candleSeries.update(d.candle);
             rsiSeries.update({ time: d.candle.time, value: d.candle.rsi });
@@ -160,17 +168,16 @@
         setTimeout(() => document.getElementById('msg').innerText = "", 3000);
     });
     socket.on('notification', (d) => { if(d.username === username) alert(d.msg); });
+    socket.on('game_over', (d) => {
+        document.getElementById('status-text').innerHTML = `WINNER: ${d.winner}<br>Returns: ₹${d.return}`;
+    });
 
     function loadStock(sym) {
         currentSym = sym;
         document.getElementById('current-stock').innerText = sym;
         candleSeries.setData(candleData[sym]);
-        
-        // RSI Data
         let rsiData = candleData[sym].map(c => ({ time: c.time, value: c.rsi || 50 }));
         rsiSeries.setData(rsiData);
-        
-        // Fix Scale
         chart.timeScale().fitContent();
     }
 
@@ -189,11 +196,10 @@
         let val = p.cash;
         let html = "";
         for(let s in p.holdings) {
-            let q = p.holdings[s];
-            if(q !== 0) {
-                html += `<div>${s}: ${q}</div>`;
+            if(p.holdings[s] !== 0) {
+                html += `<div>${s}: ${p.holdings[s]}</div>`;
                 let price = stocks ? stocks[s].price : parseFloat(document.getElementById(`p-${s}`).innerText);
-                val += q * price;
+                val += p.holdings[s] * price;
             }
         }
         document.getElementById('positions').innerHTML = html;
@@ -205,7 +211,6 @@
         document.getElementById('trig').style.display = t.includes('stop_loss') ? 'block' : 'none';
     }
     
-    // Resize
     window.addEventListener('resize', () => {
         chart.resize(document.getElementById('price-chart').clientWidth, 300);
         rsiChart.resize(document.getElementById('rsi-chart').clientWidth, 150);
