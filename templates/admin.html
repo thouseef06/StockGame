@@ -1,48 +1,38 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Organizer Dashboard</title>
+    <title>Admin Panel</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body { font-family: sans-serif; background: #eee; padding: 20px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        button { padding: 10px 20px; cursor: pointer; border: none; font-weight: bold; margin: 5px; }
-        .start { background: green; color: white; }
-        .pause { background: orange; }
-        .pattern { background: #333; color: white; border: 1px solid #555; }
-        table { width: 100%; border-collapse: collapse; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button { padding: 15px 30px; font-size: 16px; cursor: pointer; border: none; font-weight: bold; border-radius: 4px; margin-right: 10px; }
+        .start { background: #2e7d32; color: white; }
+        .pause { background: #f9a825; color: white; }
+        .resume { background: #1565c0; color: white; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         td, th { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
     </style>
 </head>
 <body>
     <h1>Organizer Dashboard</h1>
     
-    <div class="grid">
-        <div class="card">
-            <h2>Game Controls</h2>
-            <div>
-                <button class="start" onclick="act('start')">START GAME (OPEN LOBBY)</button>
-                <button class="pause" onclick="act('pause')">PAUSE</button>
-                <button class="start" onclick="act('resume')">RESUME</button>
-            </div>
-            <hr>
-            <h2>Scenario Injection (Manipulate Market)</h2>
-            <p>Click to force pattern on ALL stocks for next 10 seconds:</p>
-            <button class="pattern" onclick="act('hammer')">Force Hammer (Dip & Recover)</button>
-            <button class="pattern" onclick="act('doji')">Force Doji (Indecision)</button>
-            <br>
-            <button class="pattern" style="background:#238636;" onclick="act('bullish_engulfing')">Force Bullish Rally</button>
-            <button class="pattern" style="background:#da3633;" onclick="act('bearish_engulfing')">Force Bearish Crash</button>
+    <div class="card">
+        <h2>Game Controls</h2>
+        <div style="margin-bottom: 15px;">
+            <button class="start" onclick="act('start')">▶ START GAME</button>
+            <button class="pause" onclick="act('pause')">⏸ PAUSE</button>
+            <button class="resume" onclick="act('resume')">⏯ RESUME</button>
         </div>
+        <p><strong>Status:</strong> <span id="status" style="font-weight:bold; color:blue;">LOBBY</span> | <strong>Day:</strong> <span id="day">1</span>/12</p>
+    </div>
 
-        <div class="card">
-            <h2>Live Leaderboard</h2>
-            <table>
-                <thead><tr><th>Rank</th><th>Name</th><th>Net Worth (₹)</th></tr></thead>
-                <tbody id="lb"></tbody>
-            </table>
-        </div>
+    <div class="card">
+        <h2>Live Leaderboard</h2>
+        <table>
+            <thead><tr><th>Rank</th><th>Trader</th><th>Portfolio Value</th></tr></thead>
+            <tbody id="lb"></tbody>
+        </table>
     </div>
 
     <script>
@@ -55,9 +45,18 @@
         socket.on('leaderboard_update', (data) => {
             let html = "";
             data.forEach((p, i) => {
-                html += `<tr><td>${i+1}</td><td>${p.name}</td><td>₹${p.value.toLocaleString()}</td></tr>`;
+                let color = i===0 ? '#ffd700' : '#000';
+                let weight = i===0 ? 'bold' : 'normal';
+                html += `<tr style="color:${color}; font-weight:${weight}">
+                    <td>${i+1}</td><td>${p.name}</td><td>₹${p.value.toLocaleString()}</td>
+                </tr>`;
             });
             document.getElementById('lb').innerHTML = html;
+        });
+
+        socket.on('game_status', (d) => {
+            document.getElementById('status').innerText = d.status.toUpperCase();
+            document.getElementById('day').innerText = d.day;
         });
     </script>
 </body>
