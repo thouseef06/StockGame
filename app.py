@@ -1,6 +1,5 @@
-# --- CRITICAL FIX: These lines must be at the very top ---
 import eventlet
-eventlet.monkey_patch() 
+eventlet.monkey_patch() # Keeps the server responsive
 
 import os
 import random
@@ -13,7 +12,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 STOCKS_LIST = [
     {"symbol": "RELIANCE", "name": "Reliance Ind.", "price": 2450.00},
     {"symbol": "TCS", "name": "Tata Consultancy", "price": 3680.00},
@@ -27,7 +26,7 @@ STOCKS_LIST = [
     {"symbol": "ADANIENT", "name": "Adani Ent", "price": 2890.00}
 ]
 
-# --- 2. GLOBAL STATE ---
+# --- GLOBAL STATE ---
 game_state = {
     "status": "lobby", 
     "game_time": 0,    
@@ -38,6 +37,7 @@ game_state = {
     "pending_orders": []
 }
 
+# Initialize Data
 for s in STOCKS_LIST:
     game_state['stocks'][s['symbol']] = {
         "price": s['price'],
@@ -47,13 +47,83 @@ for s in STOCKS_LIST:
         "pattern_queue": []
     }
 
-# --- 3. PATTERN LOGIC ---
+# --- BACKGROUND THREAD MANAGEMENT ---
+thread = None
+thread_lock = threading.Lock()
+
+def background_thread():
+    """ The Market Engine that runs forever """
+    print("MARKET ENGINE: Online and Waiting...")
+    while True:
+        socketio.sleep(1)
+        
+        # If Game is Lobby or Paused, we just wait
+        if game_state['status'] != 'active':
+            continue
+            
+        # --- GAME LOGIC STARTS HERE ---
+        game_state['game_time'] += 1
+        game_state['day_progress'] += 1
+        
+        # Day Change (300s = 5 min)
+        if game_state['day_progress'] >= 300:
+            game_state['day'] += 1
+            game_state['day_progress'] = 0
+            socketio.emit('day_change', {'day': game_state['day']})
+            if game_state['day'] > 12:
+                game_state['status'] = 'ended'
+                calculate_winner()
+                continue
+
+        market_update = {}
+        
+        for symbol, data in game_state['stocks'].items():
+            # 1. AUTO SCENARIO INJECTION (20% chance every 10s)
+            if not data['pattern_queue'] and game_state['game_time'] % 10 == 0:
+                if random.random() < 0.20:
+                    patterns = ['bullish_engulfing', 'bearish_engulfing', 'hammer', 'morning_star', 'marubozu_bull']
+                    chosen = random.choice(patterns)
+                    data['pattern_queue'] = generate_pattern_targets(data['price'], chosen)
+            
+            # 2. PRICE MOVEMENT
+            if data['pattern_queue']:
+                target = data['pattern_queue'].pop(0)
+                new_price = target + random.uniform(-0.2, 0.2)
+            else:
+                new_price = data['price'] + random.uniform(-1.5, 1.5)
+            
+            if new_price < 1: new_price = 1
+            data['price'] = round(new_price, 2)
+            data['prices_raw'].append(new_price)
+            if len(data['prices_raw']) > 60: data['prices_raw'].pop(0)
+
+            # 3. CANDLE UPDATE
+            cc = data['current_candle']
+            cc['close'] = new_price
+            if new_price > cc['high']: cc['high'] = new_price
+            if new_price < cc['low']: cc['low'] = new_price
+            
+            # 4. CLOSE CANDLE (Every 10s)
+            if game_state['game_time'] % 10 == 0:
+                rsi = calculate_rsi(data['prices_raw'])
+                if random.random() < 0.10: rsi = 100 - rsi # False signal
+                
+                candle_final = {"time": game_state['game_time'], "open": cc['open'], "high": cc['high'], "low": cc['low'], "close": cc['close'], "rsi": round(rsi, 2)}
+                data['history'].append(candle_final)
+                data['current_candle'] = {"open": new_price, "high": new_price, "low": new_price, "close": new_price}
+                socketio.emit('candle_close', {'symbol': symbol, 'candle': candle_final})
+
+            market_update[symbol] = new_price
+            check_stop_losses(symbol, new_price)
+
+        socketio.emit('price_tick', market_update)
+        if game_state['game_time'] % 2 == 0: push_leaderboard()
+
+# --- HELPER FUNCTIONS ---
 def generate_pattern_targets(current_price, pattern_type):
     targets = []
     cp = current_price
-    
-    def move(start, end, steps):
-        return [start + (end - start) * (i/steps) for i in range(1, steps+1)]
+    def move(start, end, steps): return [start + (end - start) * (i/steps) for i in range(1, steps+1)]
 
     if pattern_type == 'bullish_engulfing': 
         targets.extend(move(cp, cp * 0.998, 10))
@@ -73,68 +143,7 @@ def generate_pattern_targets(current_price, pattern_type):
         targets.extend(move(mid, mid * 1.015, 10))
     elif pattern_type == 'marubozu_bull':
         targets.extend(move(cp, cp * 1.008, 10))
-
     return targets
-
-# --- 4. MARKET ENGINE ---
-def market_engine():
-    print("ENGINE: Started...")
-    while True:
-        socketio.sleep(1) # Important: Yield control
-        
-        if game_state['status'] != 'active':
-            continue
-            
-        game_state['game_time'] += 1
-        game_state['day_progress'] += 1
-        
-        if game_state['day_progress'] >= 300:
-            game_state['day'] += 1
-            game_state['day_progress'] = 0
-            socketio.emit('day_change', {'day': game_state['day']})
-            if game_state['day'] > 12:
-                game_state['status'] = 'ended'
-                calculate_winner()
-                continue
-
-        market_update = {}
-        
-        for symbol, data in game_state['stocks'].items():
-            if not data['pattern_queue'] and game_state['game_time'] % 10 == 0:
-                if random.random() < 0.20:
-                    patterns = ['bullish_engulfing', 'bearish_engulfing', 'hammer', 'morning_star', 'marubozu_bull']
-                    chosen = random.choice(patterns)
-                    data['pattern_queue'] = generate_pattern_targets(data['price'], chosen)
-            
-            if data['pattern_queue']:
-                target = data['pattern_queue'].pop(0)
-                new_price = target + random.uniform(-0.2, 0.2)
-            else:
-                new_price = data['price'] + random.uniform(-1.5, 1.5)
-            
-            if new_price < 1: new_price = 1
-            data['price'] = round(new_price, 2)
-            data['prices_raw'].append(new_price)
-            if len(data['prices_raw']) > 60: data['prices_raw'].pop(0)
-
-            cc = data['current_candle']
-            cc['close'] = new_price
-            if new_price > cc['high']: cc['high'] = new_price
-            if new_price < cc['low']: cc['low'] = new_price
-            
-            if game_state['game_time'] % 10 == 0:
-                rsi = calculate_rsi(data['prices_raw'])
-                if random.random() < 0.10: rsi = 100 - rsi 
-                candle_final = {"time": game_state['game_time'], "open": cc['open'], "high": cc['high'], "low": cc['low'], "close": cc['close'], "rsi": round(rsi, 2)}
-                data['history'].append(candle_final)
-                data['current_candle'] = {"open": new_price, "high": new_price, "low": new_price, "close": new_price}
-                socketio.emit('candle_close', {'symbol': symbol, 'candle': candle_final})
-
-            market_update[symbol] = new_price
-            check_stop_losses(symbol, new_price)
-
-        socketio.emit('price_tick', market_update)
-        if game_state['game_time'] % 2 == 0: push_leaderboard()
 
 def calculate_rsi(prices):
     if len(prices) < 15: return 50
@@ -204,7 +213,15 @@ def game(): return render_template('game.html', stocks=STOCKS_LIST)
 @app.route('/admin')
 def admin(): return render_template('admin.html')
 
-# --- SOCKETS ---
+# --- SOCKET EVENTS ---
+@socketio.on('connect')
+def handle_connect():
+    # Start the background thread ONLY if it hasn't started yet
+    global thread
+    with thread_lock:
+        if thread is None:
+            thread = socketio.start_background_task(background_thread)
+
 @socketio.on('join_game')
 def handle_join(data):
     username = data['username']
@@ -217,7 +234,6 @@ def handle_join(data):
 def handle_order(data):
     if game_state['status'] != 'active':
         emit('order_result', {'msg': "Market Closed"}); return
-    
     if data['type'] == 'market':
         price = game_state['stocks'][data['symbol']]['price']
         success = execute_trade(data['username'], data['symbol'], data['side'], int(data['qty']), price)
@@ -238,13 +254,10 @@ def handle_admin(data):
         print("ADMIN: Game Started")
     elif action == 'pause': 
         game_state['status'] = 'paused'
-        print("ADMIN: Game Paused")
     elif action == 'resume': 
         game_state['status'] = 'active'
-    
     socketio.emit('game_status', {'status': game_state['status'], 'day': game_state['day']})
 
 if __name__ == '__main__':
-    socketio.start_background_task(market_engine)
     port = int(os.environ.get("PORT", 5000))
     socketio.run(app, host='0.0.0.0', port=port)
